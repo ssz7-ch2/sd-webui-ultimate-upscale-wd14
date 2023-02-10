@@ -5,6 +5,8 @@ from modules import processing, shared, images, devices, scripts
 from modules.processing import StableDiffusionProcessing
 from modules.processing import Processed
 from modules.shared import opts, state
+from tagger3 import utils
+from tagger3.interrogator import Interrogator
 from enum import Enum
 
 class USDUMode(Enum):
@@ -20,7 +22,7 @@ class USDUSFMode(Enum):
 
 class USDUpscaler():
 
-    def __init__(self, p, image, upscaler_index:int, save_redraw, save_seams_fix, tile_width, tile_height) -> None:
+    def __init__(self, p, image, upscaler_index:int, save_redraw, save_seams_fix, tile_width, tile_height, interrogator, threshold, additional_tags, exclude_tags) -> None:
         self.p:StableDiffusionProcessing = p
         self.image:Image = image
         self.scale_factor = math.ceil(max(p.width, p.height) / max(image.width, image.height))
@@ -36,6 +38,24 @@ class USDUpscaler():
         self.initial_info = None
         self.rows = math.ceil(self.p.height / self.redraw.tile_height)
         self.cols = math.ceil(self.p.width / self.redraw.tile_width)
+        self.interrogator_name = interrogator
+        self.redraw.interrogator = utils.interrogators[interrogator]
+        self.seams_fix.interrogator = utils.interrogators[interrogator]
+        self.threshold = threshold
+        self.redraw.threshold = threshold
+        self.seams_fix.threshold = threshold
+        self.postprocess_opts = (
+            threshold,
+            utils.split_str(additional_tags),
+            utils.split_str(exclude_tags),
+            False,
+            False,
+            True,
+            utils.split_str('0_0, (o)_(o), +_+, +_-, ._., <o>_<o>, <|>_<|>, =_=, >_<, 3_3, 6_9, >_o, @_@, ^_^, o_o, u_u, x_x, |_|, ||_||'),
+            False
+        )
+        self.redraw.postprocess_opts = self.postprocess_opts
+        self.seams_fix.postprocess_opts = self.postprocess_opts
 
     def get_factor(self, num):
         # Its just return, don't need elif
@@ -124,6 +144,8 @@ class USDUpscaler():
         self.p.extra_generation_params["Ultimate SD upscale tile_height"] = self.redraw.tile_height
         self.p.extra_generation_params["Ultimate SD upscale mask_blur"] = self.p.mask_blur
         self.p.extra_generation_params["Ultimate SD upscale padding"] = self.redraw.padding
+        self.p.extra_generation_params["Ultimate SD upscale interrogator"] = self.interrogator_name
+        self.p.extra_generation_params["Ultimate SD upscale threshold"] = self.threshold
 
     def process(self):
         state.begin()
@@ -172,6 +194,7 @@ class USDURedraw():
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="white")
                 p.init_images = [image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="black")
                 if (len(processed.images) > 0):
@@ -209,6 +232,7 @@ class USDURedraw():
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="white")
                 p.init_images = [image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="black")
                 if (len(processed.images) > 0):
@@ -223,6 +247,7 @@ class USDURedraw():
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="white")
                 p.init_images = [image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 draw.rectangle(self.calc_rectangle(xi, yi), fill="black")
                 if (len(processed.images) > 0):
@@ -240,6 +265,19 @@ class USDURedraw():
             return self.linear_process(p, image, rows, cols)
         if self.mode == USDUMode.CHESS:
             return self.chess_process(p, image, rows, cols)
+
+    def get_tags(self, image):
+        _, tags = self.interrogator.interrogate(image)
+        processed_tags = Interrogator.postprocess_tags(
+            tags,
+            *self.postprocess_opts
+        )
+        return ', '.join(processed_tags)
+
+    def crop(self, image, xi, yi):
+        x = xi * self.tile_width
+        y = yi * self.tile_height
+        return image.crop((x, y, x + self.tile_width, y + self.tile_height))
 
 class USDUSeamsFix():
 
@@ -282,6 +320,7 @@ class USDUSeamsFix():
 
                 p.init_images = [image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 if (len(processed.images) > 0):
                     image = processed.images[0]
@@ -299,6 +338,7 @@ class USDUSeamsFix():
 
                 p.init_images = [image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 if (len(processed.images) > 0):
                     image = processed.images[0]
@@ -335,6 +375,7 @@ class USDUSeamsFix():
 
                 p.init_images = [fixed_image]
                 p.image_mask = mask
+                p.prompt = self.get_tags(self.crop(image, xi, yi))
                 processed = processing.process_images(p)
                 if (len(processed.images) > 0):
                     fixed_image = processed.images[0]
@@ -374,6 +415,7 @@ class USDUSeamsFix():
 
             p.init_images = [image]
             p.image_mask = mask
+            p.prompt = self.get_tags(self.crop(image, xi, yi))
             processed = processing.process_images(p)
             if (len(processed.images) > 0):
                 image = processed.images[0]
@@ -389,6 +431,7 @@ class USDUSeamsFix():
 
             p.init_images = [image]
             p.image_mask = mask
+            p.prompt = self.get_tags(self.crop(image, xi, yi))
             processed = processing.process_images(p)
             if (len(processed.images) > 0):
                 image = processed.images[0]
@@ -410,9 +453,22 @@ class USDUSeamsFix():
         else:
             return image
 
+    def get_tags(self, image):
+        _, tags = self.interrogator.interrogate(image)
+        processed_tags = Interrogator.postprocess_tags(
+            tags,
+            *self.postprocess_opts
+        )
+        return ', '.join(processed_tags)
+
+    def crop(self, image, xi, yi):
+        x = xi * self.tile_width
+        y = yi * self.tile_height
+        return image.crop((x, y, x + self.tile_width, y + self.tile_height))
+
 class Script(scripts.Script):
     def title(self):
-        return "Ultimate SD upscale"
+        return "Ultimate SD upscale wd1.4"
 
     def show(self, is_img2img):
         return is_img2img
@@ -455,10 +511,27 @@ class Script(scripts.Script):
                                 value=shared.sd_upscalers[0].name, type="index")
         with gr.Row():
             redraw_mode = gr.Dropdown(label="Type", choices=[k for k in redrow_modes], type="index", value=next(iter(redrow_modes)))
+            interrogator_names = utils.refresh_interrogators()
+            interrogator = gr.Dropdown(label='Interrogator',
+                                choices=interrogator_names, value=( None if
+                                len(interrogator_names) < 1 else
+                                interrogator_names[-1]))
+            threshold = gr.Slider(label='Threshold', minimum=0, maximum=1, value=0.75)
+        with gr.Row():
             tile_width = gr.Slider(minimum=0, maximum=2048, step=64, label='Tile width', value=512)
-            tile_height = gr.Slider(minimum=0, maximum=2048, step=64, label='Tile height', value=0)
             mask_blur = gr.Slider(label='Mask blur', minimum=0, maximum=64, step=1, value=8)
+        with gr.Row():
+            tile_height = gr.Slider(minimum=0, maximum=2048, step=64, label='Tile height', value=0)
             padding = gr.Slider(label='Padding', minimum=0, maximum=128, step=1, value=32)
+        with gr.Row():   
+            additional_tags = gr.Textbox(
+                label='Additional tags (split by comma)',
+                elem_id='additioanl-tags'
+            )
+            exclude_tags = gr.Textbox(
+                label='Exclude tags (split by comma)',
+                elem_id='exclude-tags'
+            )
         gr.HTML("<p style=\"margin-bottom:0.75em\">Seams fix:</p>")
         with gr.Row():
             seams_fix_type = gr.Dropdown(label="Type", choices=[k for k in seams_fix_types], type="index", value=next(iter(seams_fix_types)))
@@ -504,11 +577,11 @@ class Script(scripts.Script):
 
         return [info, tile_width, tile_height, mask_blur, padding, seams_fix_width, seams_fix_denoise, seams_fix_padding,
                 upscaler_index, save_upscaled_image, redraw_mode, save_seams_fix_image, seams_fix_mask_blur,
-                seams_fix_type, target_size_type, custom_width, custom_height, custom_scale]
+                seams_fix_type, target_size_type, custom_width, custom_height, custom_scale, interrogator, threshold, additional_tags, exclude_tags]
 
     def run(self, p, _, tile_width, tile_height, mask_blur, padding, seams_fix_width, seams_fix_denoise, seams_fix_padding,
             upscaler_index, save_upscaled_image, redraw_mode, save_seams_fix_image, seams_fix_mask_blur,
-            seams_fix_type, target_size_type, custom_width, custom_height, custom_scale):
+            seams_fix_type, target_size_type, custom_width, custom_height, custom_scale, interrogator, threshold, additional_tags, exclude_tags):
 
         # Init
         processing.fix_seed(p)
@@ -537,7 +610,7 @@ class Script(scripts.Script):
             p.height = math.ceil((init_img.height * custom_scale) / 64) * 64
 
         # Upscaling
-        upscaler = USDUpscaler(p, init_img, upscaler_index, save_upscaled_image, save_seams_fix_image, tile_width, tile_height)
+        upscaler = USDUpscaler(p, init_img, upscaler_index, save_upscaled_image, save_seams_fix_image, tile_width, tile_height, interrogator, threshold, additional_tags, exclude_tags)
         upscaler.upscale()
         
         # Drawing
